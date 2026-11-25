@@ -1,10 +1,7 @@
 # Router-1x3-with-Asynchronous-FIFO
 Design and verification of a 1x3 packet router integrated with asynchronous FIFOs.
-qukwuwygq
+This project implements a 1x3 Network-on-Chip (NoC) Router built on a Globally Asynchronous Locally Synchronous (GALS) architecture to safely forward OSI Layer 3 data packets across isolated, variable clock domains. Driven by a 2-bit destination address in the packet header, the router directs incoming 8-bit data streams from a single source port to one of three independent output channels. To eliminate metastability and handle Dynamic Voltage and Frequency Scaling (DVFS) scenarios, the design bridges a 125 MHz source write domain with three asynchronous destination read domains operating at 156.25 MHz, 100 MHz, and 50 MHz.
 
-gwieg
-gweifugwe
+At the core of the Clock Domain Crossing (CDC) infrastructure are three custom 64x9 Asynchronous FIFOs utilizing 7-bit Gray-code pointers and 2-stage flip-flop synchronizers. Because the asynchronous memory buffers act purely as storage elements, dedicated Read Wrapper modules (router_read_wrapper) were engineered on the read side to decode the 9th header-tracking bit, manage payload length counters, tri-state inactive buses, and enforce a 30-cycle inactivity timeout. Generated soft-reset flags are safely passed back into the write domain via dedicated 2-stage synchronizers to flush the central 8-state FSM controller and parity-checking register block without timing violations.
 
-
-
-hfiweuggfw
+The complete RTL architecture was validated using an automated, transaction-based testbench covering dynamic channel routing, bit-wise XOR parity error detection, multi-clock backpressure stalling, and timeout recovery. Following strict static linting, the design was physically synthesized in AMD Vivado, achieving a clean, hardware-ready netlist with zero inferred latches. The final physical implementation demonstrates a compact hardware footprint utilizing 202 LUTs for standard logic, 36 LUTs inferred as Distributed RAM, and 296 Flip-Flops.
