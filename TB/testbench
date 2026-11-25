@@ -1,1 +1,196 @@
-rrggghhijojoigld
+`timescale 1ns/1ps
+
+module router_top_tb();
+
+    // ---------------------------------------------------------
+    // Signal Declarations
+    // ---------------------------------------------------------
+    // Write Domain
+    reg wr_clk, wrst_n;
+    reg pkt_valid;
+    reg [7:0] data_in;
+    wire error, busy;
+
+    // Read Domain 0 (156.25 MHz)
+    reg rd_clk_0, rrst_n_0;
+    reg read_enb_0;
+    wire valid_out_0;
+    wire [7:0] data_out_0;
+
+    // Read Domain 1 (100 MHz)
+    reg rd_clk_1, rrst_n_1;
+    reg read_enb_1;
+    wire valid_out_1;
+    wire [7:0] data_out_1;
+
+    // Read Domain 2 (50 MHz)
+    reg rd_clk_2, rrst_n_2;
+    reg read_enb_2;
+    wire valid_out_2;
+    wire [7:0] data_out_2;
+
+    // Control Flags for Auto-Readers
+    reg auto_read_0, auto_read_1, auto_read_2;
+
+    // ---------------------------------------------------------
+    // DUT Instantiation
+    // ---------------------------------------------------------
+    router_top DUT (
+        .wr_clk(wr_clk), .wrst_n(wrst_n), .pkt_valid(pkt_valid), .data_in(data_in),
+        .rd_clk_0(rd_clk_0), .rrst_n_0(rrst_n_0), .read_enb_0(read_enb_0),
+        .rd_clk_1(rd_clk_1), .rrst_n_1(rrst_n_1), .read_enb_1(read_enb_1),
+        .rd_clk_2(rd_clk_2), .rrst_n_2(rrst_n_2), .read_enb_2(read_enb_2),
+        .valid_out_0(valid_out_0), .valid_out_1(valid_out_1), .valid_out_2(valid_out_2),
+        .error(error), .busy(busy),
+        .data_out_0(data_out_0), .data_out_1(data_out_1), .data_out_2(data_out_2)
+    );
+
+    // ---------------------------------------------------------
+    // Asynchronous Clock Generation
+    // ---------------------------------------------------------
+    // 125 MHz -> 8 ns period
+    initial wr_clk = 0;
+    always #4.0 wr_clk = ~wr_clk;
+
+    // 156.25 MHz -> 6.4 ns period
+    initial rd_clk_0 = 0;
+    always #3.2 rd_clk_0 = ~rd_clk_0;
+
+    // 100 MHz -> 10 ns period
+    initial rd_clk_1 = 0;
+    always #5.0 rd_clk_1 = ~rd_clk_1;
+
+    // 50 MHz -> 20 ns period
+    initial rd_clk_2 = 0;
+    always #10.0 rd_clk_2 = ~rd_clk_2;
+
+    // ---------------------------------------------------------
+    // Automated Destination Networks (Auto-Readers)
+    // ---------------------------------------------------------
+    // These blocks mimic independent networks that instantly 
+    // read data when it becomes valid, driven by their own clocks.
+    always @(negedge rd_clk_0) read_enb_0 <= (valid_out_0 && auto_read_0);
+    always @(negedge rd_clk_1) read_enb_1 <= (valid_out_1 && auto_read_1);
+    always @(negedge rd_clk_2) read_enb_2 <= (valid_out_2 && auto_read_2);
+
+    // ---------------------------------------------------------
+    // Packet Generation Task (With Backpressure Handling)
+    // ---------------------------------------------------------
+    task send_packet(input [1:0] dest_addr, input [5:0] payload_len, input bad_parity);
+        reg [7:0] header;
+        reg [7:0] payload_byte;
+        reg [7:0] calculated_parity;
+        integer i;
+        begin
+            @(negedge wr_clk);
+            // Wait if the router is currently busy
+            while(busy) @(negedge wr_clk);
+
+            // 1. Send Header
+            header = {payload_len, dest_addr};
+            pkt_valid = 1'b1;
+            data_in = header;
+            calculated_parity = header;
+            
+            // 2. Send Payload Bytes
+            for (i = 0; i < payload_len; i = i + 1) begin
+                @(negedge wr_clk);
+                // Pause transmission if FIFO fills and FSM asserts busy
+                while(busy) @(negedge wr_clk);
+                
+                payload_byte = $random;
+                data_in = payload_byte;
+                calculated_parity = calculated_parity ^ payload_byte;
+            end
+
+            // 3. Send Parity Byte
+            @(negedge wr_clk);
+            while(busy) @(negedge wr_clk);
+            pkt_valid = 1'b0;
+            
+            if (bad_parity)
+                data_in = ~calculated_parity; // Deliberately corrupt parity
+            else
+                data_in = calculated_parity;
+
+            @(negedge wr_clk);
+            data_in = 8'd0; // Clear bus
+            $display("[TIME: %0t] Packet sent to Channel %0d. Length: %0d", $time, dest_addr, payload_len);
+        end
+    endtask
+
+    // ---------------------------------------------------------
+    // Global Reset Task
+    // ---------------------------------------------------------
+    task reset_system();
+        begin
+            wrst_n = 0; rrst_n_0 = 0; rrst_n_1 = 0; rrst_n_2 = 0;
+            pkt_valid = 0; data_in = 0;
+            auto_read_0 = 1; auto_read_1 = 1; auto_read_2 = 1;
+            #50;
+            wrst_n = 1; rrst_n_0 = 1; rrst_n_1 = 1; rrst_n_2 = 1;
+            #20;
+        end
+    endtask
+
+    // ---------------------------------------------------------
+    // Main Test Sequence
+    // ---------------------------------------------------------
+    initial begin
+        $display("==================================================");
+        $display("   ASYNCHRONOUS ROUTER 1x3 VERIFICATION STARTED");
+        $display("==================================================");
+
+        reset_system();
+
+        // ---------------------------------------------------------
+        // TEST 1: Fast Channel Routing (156.25 MHz)
+        // ---------------------------------------------------------
+        $display("\n--- TEST 1: Standard Routing to Fast Channel (0) ---");
+        send_packet(2'd0, 6'd5, 0);
+        #200;
+
+        // ---------------------------------------------------------
+        // TEST 2: Error Check Mechanism (Bad Parity)
+        // ---------------------------------------------------------
+        $display("\n--- TEST 2: Parity Corruption Detection on Medium Channel (1) ---");
+        send_packet(2'd1, 6'd8, 1); // 1 = Inject Bad Parity
+        #150;
+        if (error) $display("SUCCESS: Parity Error accurately detected by router_reg!");
+        else $display("FAILURE: Parity Error missed!");
+        #100;
+
+        // ---------------------------------------------------------
+        // TEST 3: Backpressure & FIFO Full Avoidance (50 MHz)
+        // ---------------------------------------------------------
+        // We write at 125 MHz but destination 2 only reads at 50 MHz.
+        // Sending a massive 60-byte packet will rapidly fill the 64-depth FIFO,
+        // forcing the FSM to assert 'busy' and stall the send_packet task.
+        $display("\n--- TEST 3: Backpressure on Slow Channel (2) ---");
+        send_packet(2'd2, 6'd60, 0); 
+        #2000; // Allow slow clock time to drain the FIFO
+
+        // ---------------------------------------------------------
+        // TEST 4: The 30-Cycle Timeout / Soft Reset Recovery
+        // ---------------------------------------------------------
+        $display("\n--- TEST 4: 30-Cycle Timeout & Soft Reset Recovery ---");
+        auto_read_0 = 0; // Turn off the destination network for Channel 0
+        send_packet(2'd0, 6'd4, 0); // Send data, but no one reads it
+        
+        $display("Waiting for destination network timeout...");
+        // Wait for 35 read_clk_0 cycles (6.4ns * 35 = ~224ns)
+        #250; 
+        
+        if (!valid_out_0) $display("SUCCESS: Channel 0 successfully flushed via soft reset!");
+        else $display("FAILURE: Channel 0 failed to flush on timeout!");
+
+        auto_read_0 = 1; // Turn network back on
+        #50;
+
+        $display("\n==================================================");
+        $display("   VERIFICATION COMPLETE");
+        $display("==================================================");
+        $finish;
+    end
+
+endmodule
